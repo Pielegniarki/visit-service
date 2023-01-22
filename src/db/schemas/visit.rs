@@ -5,9 +5,10 @@ use serde::{Serialize, Deserialize};
 pub struct Visit {
     pub _id: ObjectId,
     #[serde(rename = "doctorId")]
-    pub doctor_id: String,
+    pub doctor_id: ObjectId,
     #[serde(rename = "patientId")]
     pub patient_id: u32,
+    pub closed: bool,
     #[serde(with="bson_datetime_as_rfc3339_string")]
     pub date: DateTime
 }

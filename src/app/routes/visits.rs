@@ -1,42 +1,44 @@
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
-use axum::{extract::{State, Query}, response::IntoResponse, Json, http::StatusCode};
-use mongodb::bson::{doc, oid::ObjectId, DateTime, serde_helpers::bson_datetime_as_rfc3339_string};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use mongodb::bson::{doc, oid::ObjectId, serde_helpers::bson_datetime_as_rfc3339_string, DateTime};
 use serde::Deserialize;
 
 use futures::TryStreamExt;
 
-use crate::{app::AppState, db::schemas::Visit};
+use crate::{
+    app::{token_extractor::ExtractId, AppState},
+    db::schemas::Visit,
+};
 
 #[derive(Deserialize, Debug)]
-pub struct ScheduleVisitParams { 
-    #[serde(rename(deserialize = "patientId"))]
-    pub patient_id: u32,
+pub struct ScheduleVisitParams {
     #[serde(rename(deserialize = "doctorId"))]
-    pub doctor_id: String,
-    #[serde(with="bson_datetime_as_rfc3339_string")]
-    pub date: DateTime
-}
-
-impl<'a> Into<Visit> for ScheduleVisitParams {
-    fn into(self) -> Visit {
-        Visit { 
-            _id: ObjectId::new(), 
-            doctor_id: self.doctor_id, 
-            patient_id: self.patient_id, 
-            date: self.date 
-        }
-    }
+    pub doctor_id: ObjectId,
+    #[serde(with = "bson_datetime_as_rfc3339_string")]
+    pub date: DateTime,
 }
 
 pub async fn schedule_visit(
+    ExtractId(patient_id): ExtractId,
     State(state): State<Arc<AppState>>,
-    Json(param): Json<ScheduleVisitParams>,
+    Json(params): Json<ScheduleVisitParams>,
 ) -> impl IntoResponse {
     let colls = state.db.collections();
     let visits = colls.visit();
 
-    let visit: Visit = param.into();
+    let visit = Visit {
+        _id: ObjectId::new(),
+        doctor_id: params.doctor_id,
+        patient_id: *patient_id.as_patient().unwrap(),
+        closed: false,
+        date: params.date,
+    };
 
     let Ok(_) = visits.insert_one(visit, None).await else {
         return StatusCode::NOT_FOUND
@@ -45,24 +47,19 @@ pub async fn schedule_visit(
     StatusCode::OK
 }
 
-#[derive(Deserialize)]
-pub struct ListAllOfPatientParams {
-    pub id: u32
-}
-
 pub async fn list_all_of_patient(
-    Query(params): Query<ListAllOfPatientParams>,
-    State(state): State<Arc<AppState>>
+    ExtractId(id): ExtractId,
+    State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let colls = state.db.collections();
     let visits = colls.visit();
 
-    
-    dbg!("XD1");
-
-    let result = match visits.find(doc! { "patientId": params.id }, None).await {
+    let result = match visits
+        .find(doc! { "patientId": id.as_patient().unwrap() }, None)
+        .await
+    {
         Ok(cursor) => cursor,
-        Err(_) => return Json(vec![])
+        Err(_) => return Json(vec![]),
     };
 
     let res = result.try_collect().await.unwrap();
@@ -70,28 +67,52 @@ pub async fn list_all_of_patient(
     Json(res)
 }
 
-
-#[derive(Deserialize)]
-pub struct ListAllOfDoctorParams {
-    pub id: String
-}
-
 pub async fn list_all_of_doctor(
-    Query(params): Query<ListAllOfDoctorParams>,
-    State(state): State<Arc<AppState>>
+    ExtractId(id): ExtractId,
+    State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let colls = state.db.collections();
     let visits = colls.visit();
 
-    let result = match visits.find(doc! { "doctorId": params.id }, None).await {
+    let result = match visits
+        .find(
+            doc! { "doctorId": ObjectId::from_str(&id.as_doctor().unwrap()).unwrap() },
+            None,
+        )
+        .await
+    {
         Ok(cursor) => cursor,
-        Err(_) => return Json(vec![])
+        Err(_) => return Json(vec![]),
     };
 
     let Ok(visits) = result.try_collect().await else {
         return Json(vec![])
     };
 
-
     Json(visits)
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CloseVisitParams {
+    #[serde(rename(deserialize = "visitId"))]
+    pub visit_id: String,
+}
+
+pub async fn close_visit(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<CloseVisitParams>,
+) -> impl IntoResponse {
+    let visits = state.db.collections().visit();
+
+    let Ok(x) = visits.update_one(
+        doc!{ "_id": ObjectId::from_str(&params.visit_id).unwrap()  },
+        doc!{ "$set": { "closed": true }},
+        None
+    ).await else {
+        return "Err"
+    };
+
+    dbg!(x);
+
+    "Ok"
 }

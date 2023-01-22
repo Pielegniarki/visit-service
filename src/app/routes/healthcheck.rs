@@ -8,7 +8,6 @@ pub async fn http() -> impl IntoResponse {
     "Server OK"
 }
 
-#[axum_macros::debug_handler]
 pub async fn db(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let colls = state.db.collections();
     let doctors = colls.visit();
